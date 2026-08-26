@@ -9,4 +9,5 @@ dependencies = [
     "python-dotenv>=1.0",
     "rich>=13.7",
     "loguru>=0.7",
+    "cryptg>=0.4",
 ]
