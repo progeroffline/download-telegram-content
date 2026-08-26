@@ -18,8 +18,6 @@ from rich.progress import (
 from telethon import TelegramClient
 from telethon.tl.types import PeerChannel
 
-from fast_downloader import fast_download_to_file
-
 load_dotenv()
 
 API_ID = os.getenv("TELEGRAM_API_ID")
@@ -73,24 +71,6 @@ async def resolve_entity(client: TelegramClient, entity_ref):
         raise
 
 
-def resolve_filename(m) -> str:
-    if m.file and m.file.name:
-        return m.file.name
-    ext = m.file.ext if m.file else ""
-    return f"message_{m.id}{ext}"
-
-
-def unique_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    i = 1
-    while True:
-        candidate = path.with_name(f"{path.stem}-{i}{path.suffix}")
-        if not candidate.exists():
-            return candidate
-        i += 1
-
-
 def make_progress() -> Progress:
     return Progress(
         TextColumn("[bold]{task.description}", justify="right"),
@@ -135,21 +115,20 @@ async def download_message_media(client: TelegramClient, link: str) -> None:
 
     with make_progress() as progress:
         for m in media_messages:
-            filename = resolve_filename(m)
-            dest = unique_path(DOWNLOADS_DIR / filename)
+            name = (m.file.name if m.file else None) or f"message_{m.id}"
             total = m.file.size if m.file else None
-            task_id = progress.add_task(filename, total=total)
+            task_id = progress.add_task(name, total=total)
 
             def on_progress(current: int, total: int, task_id=task_id) -> None:
                 progress.update(task_id, completed=current, total=total)
 
-            try:
-                path = await fast_download_to_file(
-                    client, m, dest, progress_callback=on_progress
-                )
+            path = await client.download_media(
+                m, file=str(DOWNLOADS_DIR) + os.sep, progress_callback=on_progress
+            )
+            if path:
                 logger.success(f"Скачано: {path}")
-            except Exception:
-                logger.exception(f"Не удалось скачать медиа из сообщения {m.id}")
+            else:
+                logger.error(f"Не удалось скачать медиа из сообщения {m.id}")
 
 
 async def main() -> None:
