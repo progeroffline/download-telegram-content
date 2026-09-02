@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ from main import (
     is_video_message,
     original_video_name,
     parse_channel,
+    save_video_text,
     video_destination,
 )
 
@@ -57,6 +59,28 @@ class VideoHelpersTests(unittest.TestCase):
                 video_destination(message),
                 Path("downloads/2026/09/02/1600/original.mp4"),
             )
+
+    def test_saves_message_text_next_to_video(self):
+        message = SimpleNamespace(message="Описание видео — текст")
+        with TemporaryDirectory() as directory:
+            video_path = Path(directory) / "original.mp4"
+
+            text_path = save_video_text(message, video_path)
+
+            self.assertEqual(text_path, Path(directory) / "original.txt")
+            self.assertEqual(
+                text_path.read_text(encoding="utf-8"),
+                "Описание видео — текст",
+            )
+
+    def test_saves_empty_file_when_message_has_no_text(self):
+        message = SimpleNamespace(message=None)
+        with TemporaryDirectory() as directory:
+            video_path = Path(directory) / "original.mp4"
+
+            text_path = save_video_text(message, video_path)
+
+            self.assertEqual(text_path.read_text(encoding="utf-8"), "")
 
 
 if __name__ == "__main__":

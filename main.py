@@ -162,6 +162,13 @@ def video_destination(message) -> Path:
     )
 
 
+def save_video_text(message, video_path: Path) -> Path:
+    text_path = video_path.with_suffix(".txt")
+    text = getattr(message, "message", None) or ""
+    text_path.write_text(text, encoding="utf-8")
+    return text_path
+
+
 def is_video_message(message) -> bool:
     mime_type = getattr(getattr(message, "document", None), "mime_type", "")
     return bool(mime_type and mime_type.startswith("video/"))
@@ -184,9 +191,11 @@ async def download_channel_videos(
     async def download_one(message, progress: Progress) -> None:
         destination = video_destination(message)
         if destination.exists():
+            text_path = save_video_text(message, destination)
             async with counters_lock:
                 counters["skipped"] += 1
             logger.info(f"Уже скачано: {destination}")
+            logger.info(f"Текст сообщения сохранён: {text_path}")
             return
 
         async with semaphore:
@@ -207,9 +216,11 @@ async def download_channel_videos(
                     )
                 if result is not None:
                     partial_destination.replace(destination)
+                    text_path = save_video_text(message, destination)
                     async with counters_lock:
                         counters["downloaded"] += 1
                     logger.success(f"Скачано: {destination}")
+                    logger.success(f"Текст сообщения сохранён: {text_path}")
                 else:
                     logger.error(f"Не удалось скачать видео из сообщения {message.id}")
             except Exception:
@@ -277,6 +288,9 @@ async def download_message_media(client: TelegramClient, link: str) -> None:
             )
             if path:
                 logger.success(f"Скачано: {path}")
+                if is_video_message(m):
+                    text_path = save_video_text(m, Path(path))
+                    logger.success(f"Текст сообщения сохранён: {text_path}")
             else:
                 logger.error(f"Не удалось скачать медиа из сообщения {m.id}")
 
