@@ -68,6 +68,16 @@ def parse_args() -> argparse.Namespace:
             "username, @username или ссылку t.me"
         ),
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        metavar="N",
+        help=(
+            "число видео, скачиваемых параллельно при --channel "
+            "(по умолчанию: 4)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -157,25 +167,29 @@ def is_video_message(message) -> bool:
     return bool(mime_type and mime_type.startswith("video/"))
 
 
-async def download_channel_videos(client: TelegramClient, channel: str) -> None:
+async def download_channel_videos(
+    client: TelegramClient, channel: str, concurrency: int = 4
+) -> None:
     entity_ref = parse_channel(channel)
     entity = await resolve_entity(client, entity_ref)
 
-    downloaded = 0
-    skipped = 0
-    logger.info("Просматриваю канал от старых сообщений к новым...")
+    counters = {"downloaded": 0, "skipped": 0}
+    counters_lock = asyncio.Lock()
+    semaphore = asyncio.Semaphore(concurrency)
+    logger.info(
+        f"Просматриваю канал от старых сообщений к новым "
+        f"(до {concurrency} видео параллельно)..."
+    )
 
-    with make_progress() as progress:
-        async for message in client.iter_messages(entity, reverse=True):
-            if not is_video_message(message):
-                continue
+    async def download_one(message, progress: Progress) -> None:
+        destination = video_destination(message)
+        if destination.exists():
+            async with counters_lock:
+                counters["skipped"] += 1
+            logger.info(f"Уже скачано: {destination}")
+            return
 
-            destination = video_destination(message)
-            if destination.exists():
-                skipped += 1
-                logger.info(f"Уже скачано: {destination}")
-                continue
-
+        async with semaphore:
             destination.parent.mkdir(parents=True, exist_ok=True)
             partial_destination = destination.with_name(f"{destination.name}.part")
             total = message.file.size if message.file else None
@@ -193,7 +207,8 @@ async def download_channel_videos(client: TelegramClient, channel: str) -> None:
                     )
                 if result is not None:
                     partial_destination.replace(destination)
-                    downloaded += 1
+                    async with counters_lock:
+                        counters["downloaded"] += 1
                     logger.success(f"Скачано: {destination}")
                 else:
                     logger.error(f"Не удалось скачать видео из сообщения {message.id}")
@@ -202,7 +217,20 @@ async def download_channel_videos(client: TelegramClient, channel: str) -> None:
             finally:
                 progress.remove_task(task_id)
 
-    logger.info(f"Готово. Скачано: {downloaded}, уже было на диске: {skipped}.")
+    with make_progress() as progress:
+        tasks = []
+        async for message in client.iter_messages(entity, reverse=True):
+            if not is_video_message(message):
+                continue
+            tasks.append(asyncio.create_task(download_one(message, progress)))
+
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    logger.info(
+        f"Готово. Скачано: {counters['downloaded']}, "
+        f"уже было на диске: {counters['skipped']}."
+    )
 
 
 async def download_message_media(client: TelegramClient, link: str) -> None:
@@ -269,7 +297,7 @@ async def main() -> None:
 
     if args.channel:
         try:
-            await download_channel_videos(client, args.channel)
+            await download_channel_videos(client, args.channel, args.concurrency)
         except ValueError as exc:
             logger.error(str(exc))
         except Exception:
