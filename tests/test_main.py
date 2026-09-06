@@ -9,6 +9,7 @@ from telethon.tl.types import PeerChannel
 
 from main import (
     is_video_message,
+    last_downloaded_video_time,
     original_video_name,
     parse_channel,
     save_video_text,
@@ -81,6 +82,23 @@ class VideoHelpersTests(unittest.TestCase):
             text_path = save_video_text(message, video_path)
 
             self.assertEqual(text_path.read_text(encoding="utf-8"), "")
+
+    def test_finds_newest_folder_with_completed_video(self):
+        with TemporaryDirectory() as directory:
+            downloads = Path(directory)
+            completed = downloads / "2026/09/02/1600"
+            completed.mkdir(parents=True)
+            (completed / "video.mp4").touch()
+            incomplete = downloads / "2026/09/02/1700"
+            incomplete.mkdir(parents=True)
+            (incomplete / "video.mp4.part").touch()
+            (incomplete / "video.txt").touch()
+
+            with patch("main.DOWNLOADS_DIR", new=downloads):
+                self.assertEqual(
+                    last_downloaded_video_time(),
+                    datetime.fromisoformat("2026-09-02T16:00:00+03:00"),
+                )
 
 
 if __name__ == "__main__":

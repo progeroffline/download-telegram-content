@@ -3,7 +3,7 @@ import asyncio
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -162,6 +162,31 @@ def video_destination(message) -> Path:
     )
 
 
+def last_downloaded_video_time() -> datetime | None:
+    """Return the newest channel-video folder that contains a completed file."""
+    latest = None
+    for directory in DOWNLOADS_DIR.glob("*/*/*/*"):
+        if not directory.is_dir():
+            continue
+
+        try:
+            published_at = datetime.strptime(
+                "/".join(directory.relative_to(DOWNLOADS_DIR).parts),
+                "%Y/%m/%d/%H%M",
+            ).replace(tzinfo=UKRAINE_TIMEZONE)
+        except ValueError:
+            continue
+
+        has_video = any(
+            entry.is_file() and entry.suffix not in {".part", ".txt"}
+            for entry in directory.iterdir()
+        )
+        if has_video and (latest is None or published_at > latest):
+            latest = published_at
+
+    return latest
+
+
 def save_video_text(message, video_path: Path) -> Path:
     text_path = video_path.with_suffix(".txt")
     text = getattr(message, "message", None) or ""
@@ -183,10 +208,21 @@ async def download_channel_videos(
     counters = {"downloaded": 0, "skipped": 0}
     counters_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(concurrency)
-    logger.info(
-        f"Просматриваю канал от старых сообщений к новым "
-        f"(до {concurrency} видео параллельно)..."
-    )
+    resume_from = last_downloaded_video_time()
+    iter_kwargs = {"reverse": True}
+    if resume_from:
+        # Folder names are precise to a minute. Re-read the preceding minute
+        # so videos published in the same minute are still considered; files
+        # already on disk are skipped below.
+        start_time = resume_from - timedelta(minutes=1)
+        iter_kwargs["offset_date"] = start_time.astimezone(timezone.utc)
+        logger.info(
+            f"Продолжаю с {start_time.strftime('%Y-%m-%d %H:%M')} "
+            f"({UKRAINE_TIMEZONE.key}); уже скачанные файлы будут пропущены."
+        )
+    else:
+        logger.info("Сохранённых видео не найдено, начинаю с начала канала.")
+    logger.info(f"До {concurrency} видео скачиваются параллельно...")
 
     async def download_one(message, progress: Progress) -> None:
         destination = video_destination(message)
@@ -230,7 +266,7 @@ async def download_channel_videos(
 
     with make_progress() as progress:
         tasks = []
-        async for message in client.iter_messages(entity, reverse=True):
+        async for message in client.iter_messages(entity, **iter_kwargs):
             if not is_video_message(message):
                 continue
             tasks.append(asyncio.create_task(download_one(message, progress)))
