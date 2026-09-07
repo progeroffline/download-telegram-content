@@ -78,6 +78,15 @@ def parse_args() -> argparse.Namespace:
             "(по умолчанию: 4)"
         ),
     )
+    parser.add_argument(
+        "--from-date",
+        type=parse_from_date,
+        metavar="YYYY-MM-DD",
+        help=(
+            "скачивать видео, опубликованные начиная с этой даты "
+            "в часовом поясе Europe/Kyiv; отключает автоматическое продолжение"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -111,6 +120,17 @@ def parse_channel(channel: str):
     if channel_id:
         return PeerChannel(int(channel_id))
     return match.group("username")
+
+
+def parse_from_date(value: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(
+            tzinfo=UKRAINE_TIMEZONE
+        )
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "дата должна быть в формате YYYY-MM-DD"
+        ) from exc
 
 
 async def resolve_entity(client: TelegramClient, entity_ref):
@@ -200,7 +220,10 @@ def is_video_message(message) -> bool:
 
 
 async def download_channel_videos(
-    client: TelegramClient, channel: str, concurrency: int = 4
+    client: TelegramClient,
+    channel: str,
+    concurrency: int = 4,
+    from_date: datetime | None = None,
 ) -> None:
     entity_ref = parse_channel(channel)
     entity = await resolve_entity(client, entity_ref)
@@ -208,20 +231,30 @@ async def download_channel_videos(
     counters = {"downloaded": 0, "skipped": 0}
     counters_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(concurrency)
-    resume_from = last_downloaded_video_time()
     iter_kwargs = {"reverse": True}
-    if resume_from:
-        # Folder names are precise to a minute. Re-read the preceding minute
-        # so videos published in the same minute are still considered; files
-        # already on disk are skipped below.
-        start_time = resume_from - timedelta(minutes=1)
+    if from_date:
+        # Telethon's offset is exclusive, so start a second earlier and
+        # filter by date below to keep the requested date inclusive.
+        start_time = from_date - timedelta(seconds=1)
         iter_kwargs["offset_date"] = start_time.astimezone(timezone.utc)
         logger.info(
-            f"Продолжаю с {start_time.strftime('%Y-%m-%d %H:%M')} "
-            f"({UKRAINE_TIMEZONE.key}); уже скачанные файлы будут пропущены."
+            f"Скачиваю видео с {from_date.strftime('%Y-%m-%d')} "
+            f"({UKRAINE_TIMEZONE.key})."
         )
     else:
-        logger.info("Сохранённых видео не найдено, начинаю с начала канала.")
+        resume_from = last_downloaded_video_time()
+        if resume_from:
+            # Folder names are precise to a minute. Re-read the preceding minute
+            # so videos published in the same minute are still considered; files
+            # already on disk are skipped below.
+            start_time = resume_from - timedelta(minutes=1)
+            iter_kwargs["offset_date"] = start_time.astimezone(timezone.utc)
+            logger.info(
+                f"Продолжаю с {start_time.strftime('%Y-%m-%d %H:%M')} "
+                f"({UKRAINE_TIMEZONE.key}); уже скачанные файлы будут пропущены."
+            )
+        else:
+            logger.info("Сохранённых видео не найдено, начинаю с начала канала.")
     logger.info(f"До {concurrency} видео скачиваются параллельно...")
 
     async def download_one(message, progress: Progress) -> None:
@@ -267,6 +300,8 @@ async def download_channel_videos(
     with make_progress() as progress:
         tasks = []
         async for message in client.iter_messages(entity, **iter_kwargs):
+            if from_date and message.date.astimezone(UKRAINE_TIMEZONE) < from_date:
+                continue
             if not is_video_message(message):
                 continue
             tasks.append(asyncio.create_task(download_one(message, progress)))
@@ -347,7 +382,9 @@ async def main() -> None:
 
     if args.channel:
         try:
-            await download_channel_videos(client, args.channel, args.concurrency)
+            await download_channel_videos(
+                client, args.channel, args.concurrency, args.from_date
+            )
         except ValueError as exc:
             logger.error(str(exc))
         except Exception:

@@ -1,4 +1,5 @@
 import unittest
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,6 +13,7 @@ from main import (
     last_downloaded_video_time,
     original_video_name,
     parse_channel,
+    parse_from_date,
     save_video_text,
     video_destination,
 )
@@ -33,6 +35,16 @@ class ParseChannelTests(unittest.TestCase):
     def test_rejects_invalid_channel(self):
         with self.assertRaises(ValueError):
             parse_channel("not a channel!")
+
+    def test_parses_download_start_date_in_ukraine_timezone(self):
+        self.assertEqual(
+            parse_from_date("2026-09-02"),
+            datetime.fromisoformat("2026-09-02T00:00:00+03:00"),
+        )
+
+    def test_rejects_invalid_download_start_date(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            parse_from_date("02.09.2026")
 
 
 class VideoHelpersTests(unittest.TestCase):

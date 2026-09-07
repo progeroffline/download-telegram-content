@@ -78,3 +78,12 @@ downloads/2026/09/02/1600/original-video-name.txt
 ```bash
 uv run main.py --channel some_channel --concurrency 8
 ```
+
+Чтобы загрузить только видео, опубликованные начиная с определённой даты,
+передай `--from-date` в формате `YYYY-MM-DD`. Дата интерпретируется в часовом
+поясе Украины (`Europe/Kyiv`) и имеет приоритет над автоматическим
+продолжением из последней папки:
+
+```bash
+uv run main.py --channel some_channel --from-date 2026-09-01
+```
